@@ -5,7 +5,11 @@ from typing import Optional
 
 import torch
 
-from latent_svi_spatial.models.sar import apply_A_to_y, logdet_A_lowrank
+from latent_svi_spatial.models.sar import (
+    apply_A_to_y,
+    safe_logdet_A_lowrank,
+    stability_penalty,
+)
 from latent_svi_spatial.vi.variational_family import VariationalFamily, VariationalSample
 
 
@@ -18,6 +22,9 @@ class ELBOResult:
     loss: Tensor
     expected_log_likelihood: Tensor
     kl_total: Tensor
+    stability_penalty: Tensor
+    stability_rate: Tensor
+    min_reduced_eig: Tensor
     mc_logdet: Tensor
     mc_quadratic: Tensor
     mc_log_sigma2: Tensor
@@ -29,6 +36,9 @@ class ELBOResult:
             "loss": float(self.loss.item()),
             "expected_log_likelihood": float(self.expected_log_likelihood.item()),
             "kl_total": float(self.kl_total.item()),
+            "stability_penalty": float(self.stability_penalty.item()),
+            "stability_rate": float(self.stability_rate.item()),
+            "min_reduced_eig": float(self.min_reduced_eig.item()),
             "mc_logdet": float(self.mc_logdet.item()),
             "mc_quadratic": float(self.mc_quadratic.item()),
             "mc_log_sigma2": float(self.mc_log_sigma2.item()),
@@ -61,19 +71,18 @@ def _single_sample_log_likelihood(
     sample: VariationalSample,
     X: Tensor,
     y: Tensor,
-) -> tuple[Tensor, Tensor, Tensor]:
+    *,
+    unstable_logdet_value: float = -1e6,
+) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
     """
-    Compute one-sample SAR log-likelihood contribution.
+    Compute one-sample SAR log-likelihood contribution safely.
 
     Returns:
         log_lik
         logdet_term
         quadratic_term
-
-    where:
-        log_lik = T * log|A|
-                  - (NT/2) log(2π σ²)
-                  - (1/(2σ²)) Σ_t ||A y_t - X_t β||²
+        is_stable
+        min_reduced_eig
     """
     T, N, P = _validate_inputs(X, y)
 
@@ -88,16 +97,17 @@ def _single_sample_log_likelihood(
             f"beta dimension mismatch: beta has shape {tuple(beta.shape)}, expected ({P},)"
         )
 
-    if sigma2 <= 0:
-        raise ValueError(f"sigma2 must be positive, got {float(sigma2.item())}")
+    sigma2 = torch.clamp(sigma2, min=1e-8)
 
-    logdet_A = logdet_A_lowrank(H, C, rho)
+    logdet_A, is_stable, min_reduced_eig = safe_logdet_A_lowrank(
+        H,
+        C,
+        rho,
+        unstable_logdet_value=unstable_logdet_value,
+    )
 
-    # Mean term: X_t beta for all t
-    Xbeta = torch.einsum("tnp,p->tn", X, beta)  # (T, N)
-
-    # Apply A to each y_t without building dense A
-    Ay = apply_A_to_y(H, C, y, rho, zero_diagonal=True)  # (T, N)
+    Xbeta = torch.einsum("tnp,p->tn", X, beta)
+    Ay = apply_A_to_y(H, C, y, rho, zero_diagonal=True)
 
     residual = Ay - Xbeta
     quadratic = torch.sum(residual.pow(2))
@@ -112,7 +122,7 @@ def _single_sample_log_likelihood(
         - 0.5 * quadratic / sigma2
     )
 
-    return log_lik, logdet_A, quadratic
+    return log_lik, logdet_A, quadratic, is_stable, min_reduced_eig
 
 
 def estimate_elbo(
@@ -121,6 +131,10 @@ def estimate_elbo(
     y: Tensor,
     *,
     n_mc_samples: int = 1,
+    stability_penalty_weight: float = 0.0,
+    stability_margin: float = 0.05,
+    hard_stability_penalty_weight: float = 100.0,
+    unstable_logdet_value: float = -1e6,
 ) -> ELBOResult:
     """
     Monte Carlo estimate of the ELBO.
@@ -143,25 +157,52 @@ def estimate_elbo(
     logdet_terms = []
     quadratic_terms = []
     log_sigma2_terms = []
+    stability_penalty_terms = []
+    stability_indicator_terms = []
+    min_reduced_eig_terms = []
 
     for _ in range(n_mc_samples):
         sample = variational_family.rsample()
 
-        log_lik, logdet_A, quadratic = _single_sample_log_likelihood(sample, X, y)
+        log_lik, logdet_A, quadratic, is_stable, min_reduced_eig = _single_sample_log_likelihood(
+            sample,
+            X,
+            y,
+            unstable_logdet_value=unstable_logdet_value,
+        )
+
+        penalty, _, _ = stability_penalty(
+            sample.H,
+            sample.C,
+            sample.rho,
+            margin=stability_margin,
+            soft_weight=1.0,
+            hard_weight=hard_stability_penalty_weight,
+        )
 
         log_lik_terms.append(log_lik)
         logdet_terms.append(logdet_A)
         quadratic_terms.append(quadratic)
         log_sigma2_terms.append(torch.log(sample.sigma2))
+        stability_penalty_terms.append(penalty)
+        stability_indicator_terms.append(is_stable)
+        min_reduced_eig_terms.append(min_reduced_eig)
 
     expected_log_likelihood = torch.stack(log_lik_terms).mean()
     mc_logdet = torch.stack(logdet_terms).mean()
     mc_quadratic = torch.stack(quadratic_terms).mean()
     mc_log_sigma2 = torch.stack(log_sigma2_terms).mean()
+    mean_stability_penalty = torch.stack(stability_penalty_terms).mean()
+    mean_stability_rate = torch.stack(stability_indicator_terms).mean()
+    mean_min_reduced_eig = torch.stack(min_reduced_eig_terms).mean()
 
     kl_total = variational_family.kl_total()
 
-    elbo = expected_log_likelihood - kl_total
+    elbo = (
+        expected_log_likelihood
+        - kl_total
+        - stability_penalty_weight * mean_stability_penalty
+    )
     loss = -elbo
 
     return ELBOResult(
@@ -169,6 +210,9 @@ def estimate_elbo(
         loss=loss,
         expected_log_likelihood=expected_log_likelihood,
         kl_total=kl_total,
+        stability_penalty=mean_stability_penalty,
+        stability_rate=mean_stability_rate,
+        min_reduced_eig=mean_min_reduced_eig,
         mc_logdet=mc_logdet,
         mc_quadratic=mc_quadratic,
         mc_log_sigma2=mc_log_sigma2,

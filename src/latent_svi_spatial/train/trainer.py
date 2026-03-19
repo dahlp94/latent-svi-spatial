@@ -23,6 +23,10 @@ class TrainConfig:
     n_steps: int = 500
     lr: float = 1e-2
     n_mc_samples: int = 1
+    stability_penalty_weight: float = 0.0
+    hard_stability_penalty_weight: float = 100.0
+    stability_margin: float = 0.05
+    unstable_logdet_value: float = -1e6
     clip_grad_norm: Optional[float] = 5.0
     log_every: int = 50
     verbose: bool = True
@@ -35,6 +39,9 @@ class TrainState:
     loss: float
     expected_log_likelihood: float
     kl_total: float
+    stability_penalty: float
+    stability_rate: float
+    min_reduced_eig: float
     mc_logdet: float
     mc_quadratic: float
     mc_log_sigma2: float
@@ -58,6 +65,9 @@ class TrainHistory:
             "loss": [],
             "expected_log_likelihood": [],
             "kl_total": [],
+            "stability_penalty": [],
+            "stability_rate": [],
+            "min_reduced_eig": [],
             "mc_logdet": [],
             "mc_quadratic": [],
             "mc_log_sigma2": [],
@@ -73,6 +83,9 @@ class TrainHistory:
             out["loss"].append(r.loss)
             out["expected_log_likelihood"].append(r.expected_log_likelihood)
             out["kl_total"].append(r.kl_total)
+            out["stability_penalty"].append(r.stability_penalty)
+            out["stability_rate"].append(r.stability_rate)
+            out["min_reduced_eig"].append(r.min_reduced_eig)
             out["mc_logdet"].append(r.mc_logdet)
             out["mc_quadratic"].append(r.mc_quadratic)
             out["mc_log_sigma2"].append(r.mc_log_sigma2)
@@ -129,6 +142,9 @@ def _build_train_state(
         loss=float(result.loss.item()),
         expected_log_likelihood=float(result.expected_log_likelihood.item()),
         kl_total=float(result.kl_total.item()),
+        stability_penalty=float(result.stability_penalty.item()),
+        stability_rate=float(result.stability_rate.item()),
+        min_reduced_eig=float(result.min_reduced_eig.item()),
         mc_logdet=float(result.mc_logdet.item()),
         mc_quadratic=float(result.mc_quadratic.item()),
         mc_log_sigma2=float(result.mc_log_sigma2.item()),
@@ -185,6 +201,10 @@ def train_variational_model(
             X=X,
             y=y,
             n_mc_samples=config.n_mc_samples,
+            stability_penalty_weight=config.stability_penalty_weight,
+            stability_margin=config.stability_margin,
+            hard_stability_penalty_weight=config.hard_stability_penalty_weight,
+            unstable_logdet_value=config.unstable_logdet_value,
         )
 
         result.loss.backward()
@@ -218,6 +238,9 @@ def train_variational_model(
                 f"Loss={state.loss: .3f}  "
                 f"LogLik={state.expected_log_likelihood: .3f}  "
                 f"KL={state.kl_total: .3f}  "
+                f"StabPen={state.stability_penalty: .3f}  "
+                f"StableRate={state.stability_rate: .3f}  "
+                f"MinEig={state.min_reduced_eig: .3f}  "
                 f"rho_mean={state.rho_mean: .4f}  "
                 f"sigma2_mean={state.sigma2_mean: .4f}"
             )

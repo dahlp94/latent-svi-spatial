@@ -74,6 +74,35 @@ def compute_D(
     return 1.0 + rho * diag_vals
 
 
+def compute_reduced_stability_matrix(
+    H: Tensor,
+    C: Tensor,
+    rho: float | Tensor,
+    eps: float = 1e-8,
+) -> Tensor:
+    """
+    Compute the reduced r x r matrix
+
+        M = I_r - rho C H^T D^{-1} H
+
+    where
+        D = I + rho diag(H C H^T)
+
+    This is the matrix whose determinant appears in the low-rank logdet identity.
+    """
+    _, r = H.shape
+
+    D = compute_D(H, C, rho)
+    D_safe = torch.clamp(D, min=eps)
+
+    D_inv = 1.0 / D_safe
+    HD = H * D_inv.unsqueeze(1)
+    Ht_Dinv_H = torch.matmul(H.T, HD)
+
+    M = torch.eye(r, device=H.device, dtype=H.dtype) - rho * (C @ Ht_Dinv_H)
+    return M
+
+
 def logdet_A_lowrank(
     H: Tensor,
     C: Tensor,
@@ -83,29 +112,114 @@ def logdet_A_lowrank(
     """
     Compute log|A| using low-rank identity:
 
-    log|A| = sum log D_ii + log|I - rho C H^T D^{-1} H|
+        log|A| = sum log D_ii + log|I - rho C H^T D^{-1} H|
     """
-    N, r = H.shape
-
-    # Compute D
-    D = compute_D(H, C, rho)  # (N,)
+    D = compute_D(H, C, rho)
     D_safe = torch.clamp(D, min=eps)
 
     logdet_D = torch.sum(torch.log(D_safe))
 
-    # Compute H^T D^{-1} H
-    D_inv = 1.0 / D_safe  # (N,)
-    HD = H * D_inv.unsqueeze(1)  # (N, r)
-    Ht_Dinv_H = torch.matmul(H.T, HD)  # (r, r)
-
-    # Inner matrix
-    M = torch.eye(r, device=H.device, dtype=H.dtype) - rho * (C @ Ht_Dinv_H)
+    M = compute_reduced_stability_matrix(H, C, rho, eps=eps)
 
     sign, logabsdet = torch.linalg.slogdet(M)
     if torch.any(sign <= 0):
         raise ValueError("Low-rank inner matrix has non-positive determinant.")
+
     return logdet_D + logabsdet
 
+def safe_logdet_A_lowrank(
+    H: Tensor,
+    C: Tensor,
+    rho: float | Tensor,
+    *,
+    eps: float = 1e-8,
+    unstable_logdet_value: float = -1e6,
+) -> tuple[Tensor, Tensor, Tensor]:
+    """
+    Safe version of the low-rank logdet.
+
+    Returns
+    -------
+    logdet_value:
+        If stable, the true log|A|. If unstable, a large negative surrogate.
+    is_stable:
+        Scalar tensor in {0,1} indicating whether the reduced matrix had positive determinant.
+    min_real_eig:
+        Minimum real part of eigenvalues of the reduced matrix M.
+
+    Notes
+    -----
+    This function never raises on non-positive determinant. It is designed for training-time use.
+    """
+    D = compute_D(H, C, rho)
+    D_safe = torch.clamp(D, min=eps)
+
+    logdet_D = torch.sum(torch.log(D_safe))
+
+    M = compute_reduced_stability_matrix(H, C, rho, eps=eps)
+
+    sign, logabsdet = torch.linalg.slogdet(M)
+
+    eigvals = torch.linalg.eigvals(M)
+    min_real_eig = eigvals.real.min()
+
+    is_stable = (sign > 0).to(H.dtype)
+
+    fallback = torch.tensor(
+        unstable_logdet_value,
+        device=H.device,
+        dtype=H.dtype,
+    )
+
+    logdet_small = torch.where(sign > 0, logabsdet, fallback)
+    logdet_value = logdet_D + logdet_small
+
+    return logdet_value, is_stable, min_real_eig
+
+def stability_penalty(
+    H: Tensor,
+    C: Tensor,
+    rho: float | Tensor,
+    *,
+    margin: float = 0.05,
+    soft_weight: float = 1.0,
+    hard_weight: float = 100.0,
+    eps: float = 1e-8,
+) -> tuple[Tensor, Tensor, Tensor]:
+    """
+    Stability penalty for the reduced matrix M = I_r - rho C H^T D^{-1} H.
+
+    Returns
+    -------
+    penalty:
+        soft_weight * relu(margin - min_real_eig)^2
+        + hard_weight * 1{sign <= 0}
+    is_stable:
+        Scalar tensor in {0,1}
+    min_real_eig:
+        Minimum real part of eigenvalues of M
+
+    Notes
+    -----
+    The hard term is essential because instability occurs exactly at the logdet boundary.
+    """
+    M = compute_reduced_stability_matrix(H, C, rho, eps=eps)
+
+    sign, _ = torch.linalg.slogdet(M)
+    eigvals = torch.linalg.eigvals(M)
+    min_real_eig = eigvals.real.min()
+
+    margin_t = torch.tensor(margin, device=M.device, dtype=M.dtype)
+    soft_gap = torch.relu(margin_t - min_real_eig)
+    soft_term = soft_weight * soft_gap.pow(2)
+
+    hard_indicator = (sign <= 0).to(M.dtype)
+    hard_term = hard_weight * hard_indicator
+
+    penalty = soft_term + hard_term
+    is_stable = (sign > 0).to(M.dtype)
+
+    return penalty, is_stable, min_real_eig
 
 # ============================================================
 # Woodbury inverse application
@@ -190,3 +304,16 @@ def check_inverse_consistency(
     x_lr = solve_A_inv_y(H, C, y, rho)
 
     return float(torch.norm(x_dense - x_lr).item())
+
+__all__ = [
+    "apply_A_to_y",
+    "check_inverse_consistency",
+    "check_logdet_consistency",
+    "compute_A_dense",
+    "compute_D",
+    "compute_reduced_stability_matrix",
+    "logdet_A_lowrank",
+    "safe_logdet_A_lowrank",
+    "solve_A_inv_y",
+    "stability_penalty",
+]
