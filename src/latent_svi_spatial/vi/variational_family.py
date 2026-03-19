@@ -72,17 +72,10 @@ class GaussianParameter(nn.Module):
 
 class VariationalFamily(nn.Module):
     """
-    Minimal variational family for the low-rank SAR MVP.
+    Variational family for the low-rank SAR MVP.
 
-    Parameterization:
-      - H via softmax(U), U ~ diagonal Gaussian
-      - C via softplus(C_raw), C_raw ~ diagonal Gaussian
-      - rho via rho_max * sigmoid(rho_raw), rho_raw ~ diagonal Gaussian
-      - beta via diagonal Gaussian
-      - sigma2 via exp(log_sigma2_raw), log_sigma2_raw ~ diagonal Gaussian
-
-    Important:
-      We initialize rho and C in a weak-dependence regime for numerical stability.
+    Variant 1 structured VI:
+      deterministic_C=True makes C deterministic while keeping H stochastic.
     """
     def __init__(
         self,
@@ -92,6 +85,7 @@ class VariationalFamily(nn.Module):
         *,
         rho_max: float = 0.10,
         symmetric_c: bool = True,
+        deterministic_C: bool = False,
         device: Optional[torch.device] = None,
         dtype: torch.dtype = torch.float64,
     ) -> None:
@@ -111,6 +105,7 @@ class VariationalFamily(nn.Module):
         self.p_eff = p_eff
         self.rho_max = rho_max
         self.symmetric_c = symmetric_c
+        self.deterministic_C = deterministic_C
         self.device = device
         self.dtype = dtype
 
@@ -124,19 +119,24 @@ class VariationalFamily(nn.Module):
             dtype=dtype,
         )
 
-        # C_raw -> C = softplus(C_raw)
-        # Start small: softplus(-2) ≈ 0.127
-        self.q_C_raw = GaussianParameter(
-            (r, r),
-            init_mean=-2.0,
-            init_mean_noise=0.01,
-            init_log_scale=-3.5,
-            device=device,
-            dtype=dtype,
-        )
+        # C parameterization
+        if not self.deterministic_C:
+            self.q_C_raw = GaussianParameter(
+                (r, r),
+                init_mean=-2.0,
+                init_mean_noise=0.01,
+                init_log_scale=-3.5,
+                device=device,
+                dtype=dtype,
+            )
+        else:
+            c_mean = (
+                torch.full((r, r), -2.0, device=device, dtype=dtype)
+                + 0.01 * torch.randn(r, r, device=device, dtype=dtype)
+            )
+            self.C_mean_raw = nn.Parameter(c_mean)
 
         # rho_raw -> rho = rho_max * sigmoid(rho_raw)
-        # Start near zero: sigmoid(-4) ≈ 0.018
         self.q_rho_raw = GaussianParameter(
             (1,),
             init_mean=-4.0,
@@ -157,7 +157,6 @@ class VariationalFamily(nn.Module):
         )
 
         # log sigma2 -> sigma2 = exp(log sigma2)
-        # Start around exp(-1) ≈ 0.37
         self.q_log_sigma2 = GaussianParameter(
             (1,),
             init_mean=-1.0,
@@ -173,7 +172,14 @@ class VariationalFamily(nn.Module):
         return H, U
 
     def sample_C(self) -> tuple[Tensor, Tensor]:
-        C_raw, _ = self.q_C_raw.rsample()
+        """
+        Sample or deterministically construct C.
+        """
+        if not self.deterministic_C:
+            C_raw, _ = self.q_C_raw.rsample()
+        else:
+            C_raw = self.C_mean_raw
+
         C = _softplus_positive(C_raw)
 
         if self.symmetric_c:
@@ -219,9 +225,16 @@ class VariationalFamily(nn.Module):
         return torch.softmax(self.q_U.mean, dim=1)
 
     def mean_C(self) -> Tensor:
-        C = _softplus_positive(self.q_C_raw.mean)
+        if not self.deterministic_C:
+            C_raw = self.q_C_raw.mean
+        else:
+            C_raw = self.C_mean_raw
+
+        C = _softplus_positive(C_raw)
+
         if self.symmetric_c:
             C = 0.5 * (C + C.T)
+
         return C
 
     def mean_rho(self) -> Tensor:
@@ -237,7 +250,9 @@ class VariationalFamily(nn.Module):
         return self.q_U.kl_to_standard_normal()
 
     def kl_C(self) -> Tensor:
-        return self.q_C_raw.kl_to_standard_normal()
+        if not self.deterministic_C:
+            return self.q_C_raw.kl_to_standard_normal()
+        return torch.zeros((), device=self.q_U.mean.device, dtype=self.q_U.mean.dtype)
 
     def kl_rho(self) -> Tensor:
         return self.q_rho_raw.kl_to_standard_normal()
@@ -268,6 +283,7 @@ class VariationalFamily(nn.Module):
                 "kl_beta": float(self.kl_beta().item()),
                 "kl_sigma2": float(self.kl_sigma2().item()),
                 "kl_total": float(self.kl_total().item()),
+                "deterministic_C": float(self.deterministic_C),
             }
 
 
