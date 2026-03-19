@@ -48,6 +48,7 @@ def main() -> None:
     print(f"True rho     : {float(data.rho):.6f}")
     print(f"True sigma2  : {float(data.sigma2):.6f}")
     print(f"||W||_F      : {float(torch.norm(data.W).item()):.6f}")
+    print(f"rho upper bd : {float(data.rho_upper_bound):.6f}")
     print()
 
     # ---------------------------------------------------------
