@@ -41,6 +41,9 @@ class SyntheticConfig:
     x_distribution: Literal["normal", "uniform"] = "normal"
     standardize_x: bool = False
 
+    enforce_stability: bool = True
+    stability_margin: float = 0.95
+
     seed: Optional[int] = None
     device: str = "cpu"
     dtype: str = "float64"
@@ -62,6 +65,7 @@ class SyntheticPanelData:
     time_fe: Tensor          # (T,)
     mean: Tensor             # (T, N), deterministic component before solve
     A: Tensor                # I - rho W
+    rho_upper_bound: Tensor      # scalar tensor
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -357,13 +361,33 @@ def generate_synthetic_panel(config: SyntheticConfig) -> SyntheticPanelData:
         W_raw,
         mode=config.normalize_w,
     )
-
+    
     rho_upper = stable_rho_upper_bound(W)
+
     if rho_upper != float("inf") and abs(config.rho) >= rho_upper:
-        raise ValueError(
-            f"rho={config.rho:.4f} is not stable for generated W. "
-            f"Need |rho| < {rho_upper:.4f}."
-        )
+        if config.enforce_stability and config.normalize_w == "none":
+            # Since W is linear in C, rescaling C rescales W and preserves structure.
+            # We shrink just enough so that target rho sits safely inside the stable region.
+            scale = config.stability_margin * rho_upper / abs(config.rho)
+
+            C = C * scale
+            W_raw = W_raw * scale
+            W = W * scale
+
+            rho_upper = stable_rho_upper_bound(W)
+
+            if rho_upper != float("inf") and abs(config.rho) >= rho_upper:
+                raise ValueError(
+                    f"Auto-rescaling failed: rho={config.rho:.4f} still not stable. "
+                    f"Need |rho| < {rho_upper:.4f}."
+                )
+        else:
+            raise ValueError(
+                f"rho={config.rho:.4f} is not stable for generated W. "
+                f"Need |rho| < {rho_upper:.4f}."
+            )
+
+
 
     X = sample_covariates(
         config.t,
@@ -412,6 +436,7 @@ def generate_synthetic_panel(config: SyntheticConfig) -> SyntheticPanelData:
         time_fe=time_fe,
         mean=mean,
         A=A,
+        rho_upper_bound=torch.tensor(rho_upper, device=device, dtype=dtype),
     )
 
 
