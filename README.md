@@ -304,6 +304,63 @@ $$
 
 ---
 
+## Phase Separation: Stability vs Structure
+
+A key insight from our experiments is that two distinct challenges arise:
+
+1. **Numerical feasibility**
+   - Variational samples can violate SAR stability:
+     $$
+     \det(I - \rho W) \le 0
+     $$
+   - This leads to ELBO failures and undefined likelihoods
+
+2. **Variational misspecification**
+   - Even when stable, the mean-field family fails to recover $W$
+
+---
+
+### Important Design Principle
+
+> Stability must be enforced before improving variational expressiveness.
+
+If structured VI is introduced prematurely:
+
+- optimization becomes harder
+- instability persists
+- improvements become difficult to interpret
+
+---
+
+### Our Approach
+
+We therefore proceed in two stages:
+
+---
+
+### Stage 1 — Stability-Aware VI (Current Focus)
+
+We modify the ELBO to ensure:
+
+* valid SAR systems
+* stable log-determinant computation
+* well-defined gradients
+
+This provides a **reliable optimization baseline**.
+
+---
+
+### Stage 2 — Structured Variational Inference (Next Step)
+
+Once stability is ensured, we introduce:
+
+* dependencies between $H$ and $C$
+* richer posterior families
+
+to improve **structural recovery of $W$**.
+
+---
+
 ## Why This Problem Is Difficult
 
 Learning spatial dependence structures is fundamentally challenging because:
@@ -318,16 +375,23 @@ Learning spatial dependence structures is fundamentally challenging because:
 
 ## Next Steps (Research Directions)
 
-### 1. Structured Variational Inference
+### 1. Stability-Aware Variational Inference (Immediate Next Step)
+
+* Add stability constraints to ELBO
+* Prevent invalid SAR samples
+* Improve numerical robustness at large N
+
+---
+
+### 2. Structured Variational Inference (Next Phase)
 
 * Introduce dependencies:
 
   * $q(H, C) \neq q(H) q(C)$
-* Block covariance or conditional VI
-
+* Improve structural recovery of $W$
 ---
 
-### 2. W-aware Objectives
+### 3. W-aware Objectives
 
 * Add penalties:
 
@@ -335,14 +399,14 @@ Learning spatial dependence structures is fundamentally challenging because:
 
 ---
 
-### 3. Spectral Regularization
+### 4. Spectral Regularization
 
 * Control eigenstructure of $W$
 * Connect to graph filters (SDM-CAR)
 
 ---
 
-### 4. Improved Variational Families
+### 5. Improved Variational Families
 
 * Normalizing flows
 * Low-rank covariance
@@ -350,7 +414,7 @@ Learning spatial dependence structures is fundamentally challenging because:
 
 ---
 
-### 5. Experiment Suite
+### 6. Experiment Suite
 
 Planned experiments:
 
