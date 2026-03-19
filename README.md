@@ -28,6 +28,62 @@ This enables:
 
 ---
 
+## Core Contributions
+
+This work makes the following contributions:
+
+---
+
+### 1. Endogenous Spatial Weight Learning
+
+* Unlike classical SAR/CAR models, we **learn the spatial weight matrix $W$** from data via a latent low-rank structure.
+
+---
+
+### 2. Low-Rank Structural Parameterization
+
+We parameterize:
+
+$$
+W = H C H^\top - \mathrm{diag}(H C H^\top)
+$$
+
+* enabling **$O(N r^2)$** computation instead of $O(N^3)$
+
+---
+
+### 3. Scalable Variational Inference for SAR Models
+
+* A VI framework that combines:
+
+  * **low-rank algebra**
+  * **Woodbury identities**
+  * **Monte Carlo ELBO**
+
+---
+
+### 4. Stability-Aware Generative Modeling
+
+Synthetic data generation enforces:
+
+$$
+|\rho| < \frac{1}{\lambda_{\max}(W)}
+$$
+
+* ensuring valid SAR processes at scale
+
+---
+
+### 5. Empirical Identification of VI Failure Modes
+
+We show:
+
+* accurate recovery of global parameters
+* systematic degradation in **latent structure recovery**
+* emergence of **numerical instability at scale**
+
+---
+
 ## Model
 
 We consider a **Spatial Autoregressive (SAR) model**:
@@ -158,6 +214,41 @@ This suggests:
 
 ---
 
+## Experiment 1 — Recovery vs Problem Size
+
+We evaluate how model performance scales with the number of spatial units (N).
+
+### Setup
+
+* (N \in {20, 50, 100})
+* Fixed latent dimension (r = 3)
+* Fixed true parameters
+* 5 random seeds per setting
+
+### Results
+
+| N   | ρ Error | W Error | RMSE | Failures |
+| --- | ------- | ------- | ---- | -------- |
+| 20  | 0.0014  | 5.70    | 0.50 | 0        |
+| 50  | 0.0032  | 9.29    | 0.52 | 0        |
+| 100 | 0.0024  | 14.04   | 0.69 | 2        |
+
+### Key Findings
+
+* **$\rho$ recovery is stable across scale**
+* **W recovery degrades significantly as N increases**
+* **Predictive error increases moderately**
+* **Numerical instability appears at larger N**
+
+---
+
+### Interpretation
+
+> Mean-field VI captures global dependence strength but fails to recover complex spatial structure as dimensionality increases.
+
+
+---
+
 ## Current Limitations
 
 1. **Mean-field assumption**
@@ -171,6 +262,57 @@ This suggests:
 3. **ELBO prioritizes likelihood**
 
    * Structural accuracy is not directly optimized
+
+---
+
+## Observed Failure Modes
+
+The following issues emerge empirically:
+
+---
+
+### 1. Structural Underfitting
+
+* The variational family cannot capture posterior dependence between $H$, $C$, and $\rho$
+* Leads to poor reconstruction of $W$
+
+---
+
+### 2. Identifiability Issues
+
+* Different $(H, C)$ combinations yield similar $W$
+* VI collapses toward easier modes
+
+---
+
+### 3. Numerical Instability
+
+* At larger $N$, samples of $(H, C, \rho)$ violate:
+
+$$
+\det(I - \rho W) > 0
+$$
+
+* Causes ELBO failures during training
+
+---
+
+### 4. Objective Mismatch
+
+* ELBO prioritizes likelihood fit over structural accuracy
+* No direct penalty on $W$
+
+---
+
+## Why This Problem Is Difficult
+
+Learning spatial dependence structures is fundamentally challenging because:
+
+* The likelihood depends on (W) **nonlinearly through log-determinants**
+* Stability constraints impose **non-convex feasible regions**
+* Latent factorization introduces **non-identifiability**
+* Posterior dependencies are **strong and global**
+
 
 ---
 
@@ -240,6 +382,21 @@ Develop a **scalable, interpretable, and statistically robust VI framework** for
   * Bayesian inference
   * network modeling
 * Enables **data-driven discovery of spatial structure**
+
+---
+
+## Toward Structured Variational Inference
+
+This work motivates the development of:
+
+* **Structured VI with dependent factors**
+* **Stability-constrained variational families**
+* **Spectral regularization of learned graphs**
+* **Flow-based posterior approximations**
+
+The goal is to move from:
+
+> Mean-field VI → Structure-aware inference for learned spatial graphs
 
 ---
 
