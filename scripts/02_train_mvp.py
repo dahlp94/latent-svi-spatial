@@ -93,6 +93,7 @@ def main() -> None:
         variational_family=vf,
         X=data.X,
         y=data.y,
+        true_W=data.W,
         config=train_config,
     )
 

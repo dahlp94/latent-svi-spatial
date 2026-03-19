@@ -5,11 +5,17 @@ from typing import Optional
 
 import torch
 
+from latent_svi_spatial.models.sar import compute_A_dense
 from latent_svi_spatial.vi.elbo import ELBOResult, estimate_elbo
 from latent_svi_spatial.vi.variational_family import VariationalFamily
 
 
 Tensor = torch.Tensor
+
+
+def build_weight_from_factors(H: Tensor, C: Tensor) -> Tensor:
+    W_raw = H @ C @ H.T
+    return W_raw - torch.diag(torch.diag(W_raw))
 
 
 @dataclass
@@ -34,7 +40,9 @@ class TrainState:
     mc_log_sigma2: float
     rho_mean: float
     sigma2_mean: float
-
+    W_fro_error: float | None = None
+    A_fro_error: float | None = None
+    predictive_rmse: float | None = None
 
 @dataclass
 class TrainHistory:
@@ -55,6 +63,9 @@ class TrainHistory:
             "mc_log_sigma2": [],
             "rho_mean": [],
             "sigma2_mean": [],
+            "W_fro_error": [],
+            "A_fro_error": [],
+            "predictive_rmse": [],
         }
         for r in self.records:
             out["step"].append(r.step)
@@ -67,6 +78,9 @@ class TrainHistory:
             out["mc_log_sigma2"].append(r.mc_log_sigma2)
             out["rho_mean"].append(r.rho_mean)
             out["sigma2_mean"].append(r.sigma2_mean)
+            out["W_fro_error"].append(r.W_fro_error)
+            out["A_fro_error"].append(r.A_fro_error)
+            out["predictive_rmse"].append(r.predictive_rmse)
         return out
 
     def last(self) -> Optional[TrainState]:
@@ -79,8 +93,36 @@ def _build_train_state(
     step: int,
     result: ELBOResult,
     variational_family: VariationalFamily,
+    X: Tensor,
+    y: Tensor,
+    true_W: Tensor | None = None,
 ) -> TrainState:
     summary = variational_family.summary()
+
+    W_fro_error = None
+    A_fro_error = None
+    predictive_rmse = None
+
+    with torch.no_grad():
+        H_mean = variational_family.mean_H()
+        C_mean = variational_family.mean_C()
+        rho_mean_tensor = variational_family.mean_rho()
+        beta_mean = variational_family.mean_beta()
+
+        W_mean = build_weight_from_factors(H_mean, C_mean)
+
+        if true_W is not None:
+            W_fro_error = float(torch.norm(W_mean - true_W).item())
+
+            A_true = compute_A_dense(true_W, rho_mean_tensor)
+            A_mean = compute_A_dense(W_mean, rho_mean_tensor)
+            A_fro_error = float(torch.norm(A_mean - A_true).item())
+
+        Xbeta_mean = torch.einsum("tnp,p->tn", X, beta_mean)
+        A_mean = compute_A_dense(W_mean, rho_mean_tensor)
+        y_hat_mean = torch.linalg.solve(A_mean, Xbeta_mean.T).T
+        predictive_rmse = float(torch.sqrt(torch.mean((y_hat_mean - y) ** 2)).item())
+
     return TrainState(
         step=step,
         elbo=float(result.elbo.item()),
@@ -92,14 +134,17 @@ def _build_train_state(
         mc_log_sigma2=float(result.mc_log_sigma2.item()),
         rho_mean=summary["rho_mean"],
         sigma2_mean=summary["sigma2_mean"],
+        W_fro_error=W_fro_error,
+        A_fro_error=A_fro_error,
+        predictive_rmse=predictive_rmse,
     )
-
 
 def train_variational_model(
     variational_family: VariationalFamily,
     X: Tensor,
     y: Tensor,
     *,
+    true_W: Tensor | None = None,
     config: Optional[TrainConfig] = None,
     optimizer: Optional[torch.optim.Optimizer] = None,
 ) -> TrainHistory:
@@ -152,7 +197,14 @@ def train_variational_model(
 
         optimizer.step()
 
-        state = _build_train_state(step, result, variational_family)
+        state = _build_train_state(
+            step,
+            result,
+            variational_family,
+            X=X,
+            y=y,
+            true_W=true_W,
+        )
         history.append(state)
 
         if config.verbose and (
@@ -160,7 +212,7 @@ def train_variational_model(
             or step % config.log_every == 0
             or step == config.n_steps
         ):
-            print(
+            msg = (
                 f"[step {step:4d}] "
                 f"ELBO={state.elbo: .3f}  "
                 f"Loss={state.loss: .3f}  "
@@ -169,6 +221,14 @@ def train_variational_model(
                 f"rho_mean={state.rho_mean: .4f}  "
                 f"sigma2_mean={state.sigma2_mean: .4f}"
             )
+
+            if state.W_fro_error is not None:
+                msg += f"  W_err={state.W_fro_error: .4f}"
+
+            if state.predictive_rmse is not None:
+                msg += f"  RMSE={state.predictive_rmse: .4f}"
+
+            print(msg)
 
     return history
 
