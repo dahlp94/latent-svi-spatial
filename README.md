@@ -1,3 +1,4 @@
+
 # Structured Variational Inference for Spatial Econometric Models
 
 ### (Latent Weight Matrix Learning via Low-Rank Factorization)
@@ -6,18 +7,18 @@
 
 ## Project Overview
 
-This project develops a **variational inference (VI) framework for spatial econometric models** where the spatial weight matrix $$ W $$ is **not fixed**, but **learned endogenously** from the data.
+This project develops a **variational inference (VI) framework for spatial econometric models** where the spatial weight matrix $W$ is **not fixed**, but **learned endogenously** from the data.
 
 Instead of assuming a pre-specified adjacency matrix, we model:
 
 $$
-W = H C H^\top - \operatorname{diag}(H C H^\top)
+W = H C H^\top - \mathrm{diag}(H C H^\top)
 $$
 
 where:
 
-* $$ H \in \mathbb{R}^{N \times r} $$: latent community memberships (simplex-constrained)
-* $$ C \in \mathbb{R}^{r \times r} $$: community interaction matrix
+* $H \in \mathbb{R}^{N \times r}$: latent community memberships (simplex-constrained)
+* $C \in \mathbb{R}^{r \times r}$: community interaction matrix
 
 This enables:
 
@@ -32,14 +33,15 @@ This enables:
 We consider a **Spatial Autoregressive (SAR) model**:
 
 $$
-(I - \rho W) y_t = X_t \beta + \varepsilon_t, \quad \varepsilon_t \sim \mathcal{N}(0, \sigma^2 I)
+(I - \rho W) y_t = X_t \beta + \varepsilon_t, \quad
+\varepsilon_t \sim \mathcal{N}(0, \sigma^2 I)
 $$
 
 with:
 
-* $$ \rho $$: spatial dependence parameter
-* $$ \beta $$: regression coefficients
-* $$ \sigma^2 $$: noise variance
+* $\rho$: spatial dependence parameter
+* $\beta$: regression coefficients
+* $\sigma^2$: noise variance
 
 ---
 
@@ -47,10 +49,10 @@ with:
 
 We use a **reparameterized variational family**:
 
-* $$ q(H) $$: softmax-transformed Gaussian (simplex)
-* $$ q(C) $$: positive matrix (softplus)
-* $$ q(\rho) $$: bounded via sigmoid
-* $$ q(\beta), q(\sigma^2) $$: Gaussian / log-normal
+* $q(H)$: softmax-transformed Gaussian (simplex)
+* $q(C)$: positive matrix (softplus)
+* $q(\rho)$: bounded via sigmoid
+* $q(\beta), q(\sigma^2)$: Gaussian / log-normal
 
 The ELBO is estimated via **Monte Carlo sampling**, with:
 
@@ -94,8 +96,8 @@ latent-svi-spatial/
 
 ### Core Modeling
 
-* Low-rank spatial weight construction $$ W = H C H^\top $$
-* SAR likelihood with learned $$ W $$
+* Low-rank spatial weight construction $W = H C H^\top$
+* SAR likelihood with learned $W$
 
 ### Efficient Linear Algebra
 
@@ -139,15 +141,15 @@ Predictive RMSE   : 0.48
 
 ## Interpretation
 
-* Scalar parameters ($$ \rho, \sigma^2, \beta $$) are well recovered
-* Learned spatial structure $$ W $$ has significant error
+* Scalar parameters ($\rho$, $\sigma^2$, $\beta$) are well recovered
+* Learned spatial structure $W$ has significant error
 * Predictive performance is reasonable (RMSE ≈ noise level)
 
 ---
 
 ## Key Insight
 
-> Variational inference successfully recovers global parameters but struggles to accurately reconstruct the latent spatial dependency structure $$ W $$.
+> Variational inference successfully recovers global parameters but struggles to accurately reconstruct the latent spatial dependency structure $W$.
 
 This suggests:
 
@@ -160,11 +162,11 @@ This suggests:
 
 1. **Mean-field assumption**
 
-   * Ignores dependence between $$ H, C, \rho $$
+   * Ignores dependence between $H$, $C$, $\rho$
 
 2. **Non-identifiability**
 
-   * Multiple $$ (H, C) $$ pairs yield similar $$ W $$
+   * Multiple $(H, C)$ pairs yield similar $W$
 
 3. **ELBO prioritizes likelihood**
 
@@ -178,7 +180,7 @@ This suggests:
 
 * Introduce dependencies:
 
-  * $$ q(H, C) \neq q(H) q(C) $$
+  * $q(H, C) \neq q(H) q(C)$
 * Block covariance or conditional VI
 
 ---
@@ -187,13 +189,13 @@ This suggests:
 
 * Add penalties:
 
-  * $$ |W| $$, spectral constraints, smoothness
+  * $|W|$, spectral constraints, smoothness
 
 ---
 
 ### 3. Spectral Regularization
 
-* Control eigenstructure of $$ W $$
+* Control eigenstructure of $W$
 * Connect to graph filters (SDM-CAR)
 
 ---
@@ -210,11 +212,11 @@ This suggests:
 
 Planned experiments:
 
-* Parameter recovery vs $$ N, T, r $$
+* Parameter recovery vs $N, T, r$
 * Comparison:
 
   * Mean-field VI vs structured VI
-* Sensitivity to spatial strength $$ \rho $$
+* Sensitivity to spatial strength $\rho$
 * Runtime scalability
 
 ---
